@@ -82,27 +82,16 @@ def main() -> None:
 
     after_datetime = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     fetch_payload = {
-        "query": """
-        query getUpcomingGroupEvents($urlname: String!, $afterDateTime: ZonedDateTime) {
-          groupByUrlname(urlname: $urlname) {
-            id
-            events(input: { first: 20, startDateRange: $afterDateTime, sortField: DATETIME }) {
-              totalCount
-              edges {
-                node {
-                  id
-                  title
-                  dateTime
-                  eventUrl
-                }
-              }
-            }
-          }
-        }
-        """,
+        "operationName": "getUpcomingGroupEvents",
         "variables": {
             "urlname": group_urlname,
             "afterDateTime": after_datetime
+        },
+        "extensions": {
+            "persistedQuery": {
+                "sha256Hash": "066e3709c68718d5ce9dd909e979ac70f99835fb3722cef77756ded808d5ca08",
+                "version": 1
+            }
         }
     }
 
@@ -123,11 +112,15 @@ def main() -> None:
     # Parse events — adjust path once we see actual response shape
     data = result.get("data", {})
     group = data.get("groupByUrlname") or data.get("group") or {}
-    edges = (
-        group.get("unifiedEvents", {}).get("edges")
-        or group.get("upcomingEvents", {}).get("edges")
-        or []
-    )
+    # Log all keys returned to diagnose shape
+    print("Group keys:", list(group.keys()))
+    edges = []
+    for key in ["events", "unifiedEvents", "upcomingEvents"]:
+        candidate = group.get(key, {})
+        if candidate and candidate.get("edges"):
+            edges = candidate["edges"]
+            print(f"Found edges under: {key}")
+            break
     events = [e["node"] for e in edges if e.get("node")]
     cutoff = datetime.now(timezone.utc) + timedelta(weeks=4)
     new_events = []
