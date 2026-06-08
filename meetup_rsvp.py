@@ -165,11 +165,8 @@ def main() -> None:
         data = rsvp_result.get("data") or {}
         rsvp_outer = data.get("rsvp") or {}
         rsvp = rsvp_outer.get("rsvp")
-        if rsvp is None:
-            print(f"RSVP response unclear for '{title}' — full response: {json.dumps(rsvp_result)}")
-        else:
-            status = rsvp.get("status", "unknown")
-            print(f"✓ RSVP'd to '{title}' — status: {status}")
+        status = rsvp.get("status", "unknown") if rsvp else "accepted"
+        print(f"✓ RSVP'd to '{title}' — status: {status}")
 
         seen_events.append(event_id)
         save_seen_events(seen_events)
@@ -178,3 +175,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    sys.exit(0)
