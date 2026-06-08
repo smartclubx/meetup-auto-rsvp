@@ -5,7 +5,7 @@ import json
 import os
 import random
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import requests
@@ -119,7 +119,12 @@ def main() -> None:
         or []
     )
     events = [e["node"] for e in edges if e.get("node")]
-    new_events = [e for e in events if e["id"] not in seen_set]
+    cutoff = datetime.now(timezone.utc) + timedelta(weeks=4)
+    new_events = [
+        e for e in events
+        if e["id"] not in seen_set
+        and datetime.fromisoformat(e["dateTime"].replace("Z", "+00:00")) <= cutoff
+    ]
 
     if not new_events:
         print("No new events to RSVP.")
