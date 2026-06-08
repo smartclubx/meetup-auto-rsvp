@@ -162,9 +162,14 @@ def main() -> None:
                 print(f"RSVP failed for '{title}': {error.get('message', error)}")
             continue
 
-        rsvp = rsvp_result.get("data", {}).get("rsvp", {}).get("rsvp", {})
-        status = rsvp.get("status", "unknown")
-        print(f"✓ RSVP'd to '{title}' — status: {status}")
+        data = rsvp_result.get("data") or {}
+        rsvp_outer = data.get("rsvp") or {}
+        rsvp = rsvp_outer.get("rsvp")
+        if rsvp is None:
+            print(f"RSVP response unclear for '{title}' — full response: {json.dumps(rsvp_result)}")
+        else:
+            status = rsvp.get("status", "unknown")
+            print(f"✓ RSVP'd to '{title}' — status: {status}")
 
         seen_events.append(event_id)
         save_seen_events(seen_events)
