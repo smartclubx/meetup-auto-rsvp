@@ -104,20 +104,14 @@ def main() -> None:
             print(f"GraphQL error: {error.get('message', error)}", file=sys.stderr)
         sys.exit(1)
 
-    # Log full response for debugging on first run
-    print("Fetch response:", json.dumps(result, indent=2)[:2000])
-
     # Parse events — adjust path once we see actual response shape
     data = result.get("data", {})
     group = data.get("groupByUrlname") or data.get("group") or {}
-    # Log all keys returned to diagnose shape
-    print("Group keys:", list(group.keys()))
     edges = []
     for key in ["events", "unifiedEvents", "upcomingEvents"]:
         candidate = group.get(key, {})
         if candidate and candidate.get("edges"):
             edges = candidate["edges"]
-            print(f"Found edges under: {key}")
             break
     events = [e["node"] for e in edges if e.get("node")]
     cutoff = datetime.now(timezone.utc) + timedelta(weeks=4)
