@@ -15,7 +15,7 @@ SEEN_EVENTS_FILE = Path("seen_events.json")
 FETCH_EVENTS_QUERY = """
 query($urlname: String!) {
   groupByUrlname(urlname: $urlname) {
-    unifiedEvents(input: { first: 20, status: UPCOMING }) {
+    upcomingEvents(input: { first: 20 }) {
       edges {
         node {
           id
@@ -121,7 +121,7 @@ def main() -> None:
         print(f"No group found for: {group_urlname}", file=sys.stderr)
         sys.exit(1)
 
-    edges = group.get("unifiedEvents", {}).get("edges", [])
+    edges = group.get("upcomingEvents", {}).get("edges", [])
     events = [e["node"] for e in edges if e.get("node")]
     new_events = [e for e in events if e["id"] not in seen_set]
 
