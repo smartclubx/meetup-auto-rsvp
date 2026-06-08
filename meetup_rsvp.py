@@ -120,11 +120,19 @@ def main() -> None:
     )
     events = [e["node"] for e in edges if e.get("node")]
     cutoff = datetime.now(timezone.utc) + timedelta(weeks=4)
-    new_events = [
-        e for e in events
-        if e["id"] not in seen_set
-        and datetime.fromisoformat(e["dateTime"].replace("Z", "+00:00")) <= cutoff
-    ]
+    new_events = []
+    for e in events:
+        if e["id"] in seen_set:
+            continue
+        dt_str = e.get("dateTime")
+        if dt_str:
+            try:
+                dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                if dt > cutoff:
+                    continue
+            except ValueError:
+                pass
+        new_events.append(e)
 
     if not new_events:
         print("No new events to RSVP.")
