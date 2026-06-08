@@ -80,19 +80,29 @@ def main() -> None:
     seen_events = load_seen_events()
     seen_set = set(seen_events)
 
-    # Fetch upcoming events using persisted query
     after_datetime = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     fetch_payload = {
-        "operationName": "getUpcomingGroupEvents",
+        "query": """
+        query getUpcomingGroupEvents($urlname: String!, $afterDateTime: ZonedDateTime) {
+          groupByUrlname(urlname: $urlname) {
+            id
+            events(input: { first: 20, startDateRange: $afterDateTime, sortField: DATETIME }) {
+              totalCount
+              edges {
+                node {
+                  id
+                  title
+                  dateTime
+                  eventUrl
+                }
+              }
+            }
+          }
+        }
+        """,
         "variables": {
             "urlname": group_urlname,
             "afterDateTime": after_datetime
-        },
-        "extensions": {
-            "persistedQuery": {
-                "sha256Hash": "066e3709c68718d5ce9dd909e979ac70f99835fb3722cef77756ded808d5ca08",
-                "version": 1
-            }
         }
     }
 
