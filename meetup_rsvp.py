@@ -5,29 +5,13 @@ import json
 import os
 import random
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
 GRAPHQL_URL = "https://www.meetup.com/gql2"
 SEEN_EVENTS_FILE = Path("seen_events.json")
-
-FETCH_EVENTS_QUERY = """
-query($urlname: String!) {
-  groupByUrlname(urlname: $urlname) {
-    upcomingEvents(input: { first: 20 }) {
-      edges {
-        node {
-          id
-          title
-          dateTime
-          eventUrl
-        }
-      }
-    }
-  }
-}
-"""
 
 RSVP_MUTATION = """
 mutation($eventId: ID!, $guestCount: Int!) {
@@ -68,12 +52,8 @@ def save_seen_events(seen_events: list) -> None:
         json.dump(seen_events, f, indent=2)
 
 
-def gql_request(session: requests.Session, query: str, variables: dict) -> dict:
-    response = session.post(
-        GRAPHQL_URL,
-        json={"query": query, "variables": variables},
-        timeout=30
-    )
+def gql_request(session: requests.Session, payload: dict) -> dict:
+    response = session.post(GRAPHQL_URL, json=payload, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -81,14 +61,9 @@ def gql_request(session: requests.Session, query: str, variables: dict) -> dict:
 def main() -> None:
     cookies = load_cookies()
     group_urlname = os.environ.get("MEETUP_GROUP_URLNAME", "opencircleclub")
-
-    # Extract CSRF tokens from cookies
-    csrf = cookies.get("MEETUP_CSRF", "")
     next_csrf = cookies.get("__Host-NEXT_MEETUP_CSRF", "")
 
     session = requests.Session()
-
-    # Set all cookies
     for name, value in cookies.items():
         session.cookies.set(name, value, domain="www.meetup.com")
 
@@ -105,8 +80,24 @@ def main() -> None:
     seen_events = load_seen_events()
     seen_set = set(seen_events)
 
+    # Fetch upcoming events using persisted query
+    after_datetime = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    fetch_payload = {
+        "operationName": "getUpcomingGroupEvents",
+        "variables": {
+            "urlname": group_urlname,
+            "afterDateTime": after_datetime
+        },
+        "extensions": {
+            "persistedQuery": {
+                "sha256Hash": "066e3709c68718d5ce9dd909e979ac70f99835fb3722cef77756ded808d5ca08",
+                "version": 1
+            }
+        }
+    }
+
     try:
-        result = gql_request(session, FETCH_EVENTS_QUERY, {"urlname": group_urlname})
+        result = gql_request(session, fetch_payload)
     except requests.RequestException as exc:
         print(f"Error fetching events: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -116,12 +107,17 @@ def main() -> None:
             print(f"GraphQL error: {error.get('message', error)}", file=sys.stderr)
         sys.exit(1)
 
-    group = result.get("data", {}).get("groupByUrlname")
-    if not group:
-        print(f"No group found for: {group_urlname}", file=sys.stderr)
-        sys.exit(1)
+    # Log full response for debugging on first run
+    print("Fetch response:", json.dumps(result, indent=2)[:2000])
 
-    edges = group.get("upcomingEvents", {}).get("edges", [])
+    # Parse events — adjust path once we see actual response shape
+    data = result.get("data", {})
+    group = data.get("groupByUrlname") or data.get("group") or {}
+    edges = (
+        group.get("unifiedEvents", {}).get("edges")
+        or group.get("upcomingEvents", {}).get("edges")
+        or []
+    )
     events = [e["node"] for e in edges if e.get("node")]
     new_events = [e for e in events if e["id"] not in seen_set]
 
@@ -134,11 +130,16 @@ def main() -> None:
         title = event.get("title", "Unknown")
         guest_count = random.randint(1, 5)
 
-        try:
-            rsvp_result = gql_request(session, RSVP_MUTATION, {
+        rsvp_payload = {
+            "query": RSVP_MUTATION,
+            "variables": {
                 "eventId": event_id,
                 "guestCount": guest_count
-            })
+            }
+        }
+
+        try:
+            rsvp_result = gql_request(session, rsvp_payload)
         except requests.RequestException as exc:
             print(f"RSVP request failed for '{title}': {exc}")
             continue
