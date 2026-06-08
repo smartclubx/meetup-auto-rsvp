@@ -3,7 +3,6 @@
 
 import json
 import os
-import random
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -14,12 +13,11 @@ GRAPHQL_URL = "https://www.meetup.com/gql2"
 SEEN_EVENTS_FILE = Path("seen_events.json")
 
 RSVP_MUTATION = """
-mutation($eventId: ID!, $guestCount: Int!) {
-  rsvp(input: { eventId: $eventId, rsvp: YES, guestCount: $guestCount }) {
+mutation($eventId: ID!) {
+  rsvp(input: { eventId: $eventId, response: YES }) {
     rsvp {
       id
       status
-      guestCount
     }
   }
 }
@@ -145,13 +143,11 @@ def main() -> None:
     for event in new_events:
         event_id = event["id"]
         title = event.get("title", "Unknown")
-        guest_count = random.randint(1, 5)
 
         rsvp_payload = {
             "query": RSVP_MUTATION,
             "variables": {
-                "eventId": event_id,
-                "guestCount": guest_count
+                "eventId": event_id
             }
         }
 
@@ -168,8 +164,7 @@ def main() -> None:
 
         rsvp = rsvp_result.get("data", {}).get("rsvp", {}).get("rsvp", {})
         status = rsvp.get("status", "unknown")
-        actual_guests = rsvp.get("guestCount", guest_count)
-        print(f"✓ RSVP'd to '{title}' — status: {status}, guests: {actual_guests}")
+        print(f"✓ RSVP'd to '{title}' — status: {status}")
 
         seen_events.append(event_id)
         save_seen_events(seen_events)
