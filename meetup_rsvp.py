@@ -134,6 +134,7 @@ def main() -> None:
                 pass
         new_events.append(e)
 
+    print(f"Total events fetched: {len(events)}, already seen: {len(seen_set)}, new to RSVP: {len(new_events)}")
     if not new_events:
         print("No new events to RSVP.")
         return
