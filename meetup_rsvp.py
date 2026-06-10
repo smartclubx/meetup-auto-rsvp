@@ -15,14 +15,7 @@ SEEN_EVENTS_FILE = Path("seen_events.json")
 RSVP_MUTATION = """
 mutation editRsvp($input: EditRsvpInput!) {
   editRsvp(input: $input) {
-    rsvp {
-      id
-      status
-      member {
-        id
-        name
-      }
-    }
+    success
   }
 }
 """
@@ -179,11 +172,7 @@ def main() -> None:
                 all_ok = False
                 continue
 
-            data = rsvp_result.get("data") or {}
-            rsvp = (data.get("editRsvp") or {}).get("rsvp") or {}
-            name = (rsvp.get("member") or {}).get("name", member_id)
-            status = rsvp.get("status", "accepted")
-            print(f"✓ RSVPd {name} to '{title}' — status: {status}")
+            print(f"✓ RSVPd member {member_id} to '{title}'")
 
         if all_ok:
             seen_events.append(event_id)
