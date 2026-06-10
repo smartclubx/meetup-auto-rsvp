@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Automatically RSVP to new Meetup events for a configured group."""
+"""Auto-RSVP members to new Meetup events using organiser editRsvp mutation."""
 
 import json
 import os
@@ -13,11 +13,15 @@ GRAPHQL_URL = "https://www.meetup.com/gql2"
 SEEN_EVENTS_FILE = Path("seen_events.json")
 
 RSVP_MUTATION = """
-mutation($eventId: ID!) {
-  rsvp(input: { eventId: $eventId, response: YES }) {
+mutation editRsvp($input: EditRsvpInput!) {
+  editRsvp(input: $input) {
     rsvp {
       id
       status
+      member {
+        id
+        name
+      }
     }
   }
 }
@@ -34,6 +38,15 @@ def load_cookies() -> dict:
     except json.JSONDecodeError as exc:
         print(f"Error: MEETUP_COOKIES is not valid JSON: {exc}", file=sys.stderr)
         sys.exit(1)
+
+
+def load_member_ids() -> list:
+    raw = os.environ.get("MEETUP_MEMBER_IDS", "")
+    ids = [m.strip() for m in raw.split(",") if m.strip()]
+    if not ids:
+        print("Error: MEETUP_MEMBER_IDS environment variable is required.", file=sys.stderr)
+        sys.exit(1)
+    return ids
 
 
 def load_seen_events() -> list:
@@ -59,12 +72,12 @@ def gql_request(session: requests.Session, payload: dict) -> dict:
 def main() -> None:
     cookies = load_cookies()
     group_urlname = os.environ.get("MEETUP_GROUP_URLNAME", "opencircleclub")
+    member_ids = load_member_ids()
     next_csrf = cookies.get("__Host-NEXT_MEETUP_CSRF", "")
 
     session = requests.Session()
     for name, value in cookies.items():
         session.cookies.set(name, value, domain="www.meetup.com")
-
     session.headers.update({
         "Content-Type": "application/json",
         "Accept": "*/*",
@@ -104,16 +117,16 @@ def main() -> None:
             print(f"GraphQL error: {error.get('message', error)}", file=sys.stderr)
         sys.exit(1)
 
-    # Parse events — adjust path once we see actual response shape
-    data = result.get("data", {})
-    group = data.get("groupByUrlname") or data.get("group") or {}
+    group = result.get("data", {}).get("groupByUrlname") or {}
     edges = []
     for key in ["events", "unifiedEvents", "upcomingEvents"]:
         candidate = group.get(key, {})
         if candidate and candidate.get("edges"):
             edges = candidate["edges"]
             break
+
     events = [e["node"] for e in edges if e.get("node")]
+
     cutoff = datetime.now(timezone.utc) + timedelta(weeks=4)
     new_events = []
     for e in events:
@@ -130,41 +143,52 @@ def main() -> None:
         new_events.append(e)
 
     print(f"Total events fetched: {len(events)}, already seen: {len(seen_set)}, new to RSVP: {len(new_events)}")
+
     if not new_events:
         print("No new events to RSVP.")
-        return
+        sys.exit(0)
 
     for event in new_events:
         event_id = event["id"]
         title = event.get("title", "Unknown")
+        all_ok = True
 
-        rsvp_payload = {
-            "query": RSVP_MUTATION,
-            "variables": {
-                "eventId": event_id
+        for member_id in member_ids:
+            rsvp_payload = {
+                "query": RSVP_MUTATION,
+                "variables": {
+                    "input": {
+                        "eventId": event_id,
+                        "memberId": member_id,
+                        "guestsCount": 0,
+                        "response": "YES"
+                    }
+                }
             }
-        }
 
-        try:
-            rsvp_result = gql_request(session, rsvp_payload)
-        except requests.RequestException as exc:
-            print(f"RSVP request failed for '{title}': {exc}")
-            continue
+            try:
+                rsvp_result = gql_request(session, rsvp_payload)
+            except requests.RequestException as exc:
+                print(f"RSVP failed for member {member_id} on '{title}': {exc}")
+                all_ok = False
+                continue
 
-        if "errors" in rsvp_result:
-            for error in rsvp_result["errors"]:
-                print(f"RSVP failed for '{title}': {error.get('message', error)}")
-            continue
+            if "errors" in rsvp_result:
+                for error in rsvp_result["errors"]:
+                    print(f"RSVP failed for member {member_id} on '{title}': {error.get('message', error)}")
+                all_ok = False
+                continue
 
-        data = rsvp_result.get("data") or {}
-        rsvp_outer = data.get("rsvp") or {}
-        rsvp = rsvp_outer.get("rsvp")
-        status = rsvp.get("status", "unknown") if rsvp else "accepted"
-        print(f"✓ RSVP'd to '{title}' — status: {status}")
+            data = rsvp_result.get("data") or {}
+            rsvp = (data.get("editRsvp") or {}).get("rsvp") or {}
+            name = (rsvp.get("member") or {}).get("name", member_id)
+            status = rsvp.get("status", "accepted")
+            print(f"✓ RSVPd {name} to '{title}' — status: {status}")
 
-        seen_events.append(event_id)
-        save_seen_events(seen_events)
-        seen_set.add(event_id)
+        if all_ok:
+            seen_events.append(event_id)
+            save_seen_events(seen_events)
+            seen_set.add(event_id)
 
 
 if __name__ == "__main__":
