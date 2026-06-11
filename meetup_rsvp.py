@@ -62,10 +62,60 @@ def gql_request(session: requests.Session, payload: dict) -> dict:
     return response.json()
 
 
+def get_target_range(event_date_str: str | None) -> tuple[int, int]:
+    if not event_date_str:
+        return (10, 15)
+    try:
+        event_dt = datetime.fromisoformat(event_date_str.replace("Z", "+00:00"))
+        days_until = (event_dt - datetime.now(timezone.utc)).days
+    except ValueError:
+        return (10, 15)
+
+    if days_until >= 14:
+        return (10, 15)
+    if days_until >= 7:
+        return (15, 25)
+    if days_until >= 1:
+        return (25, 35)
+    return (10, 15)
+
+
+def assign_guest_counts(num_members: int, target_range: tuple[int, int]) -> list[int]:
+    pool = [1, 2, 3, 4, 5]
+    counts = []
+    for _ in range(num_members):
+        if not pool:
+            pool = [1, 2, 3, 4, 5]
+        counts.append(pool.pop(0))
+
+    min_total, max_total = target_range
+    organiser_guests = 8
+
+    def total() -> int:
+        return organiser_guests + sum(counts)
+
+    while total() < min_total:
+        min_val = min(counts)
+        idx = counts.index(min_val)
+        if counts[idx] >= 5:
+            break
+        counts[idx] += 1
+
+    while total() > max_total:
+        max_val = max(counts)
+        idx = counts.index(max_val)
+        if counts[idx] <= 1:
+            break
+        counts[idx] -= 1
+
+    return counts
+
+
 def main() -> None:
     cookies = load_cookies()
     group_urlname = os.environ.get("MEETUP_GROUP_URLNAME", "opencircleclub")
     member_ids = load_member_ids()
+    organiser_id = os.environ.get("MEETUP_ORGANISER_ID", "469236254")
     next_csrf = cookies.get("__Host-NEXT_MEETUP_CSRF", "")
 
     session = requests.Session()
@@ -146,14 +196,18 @@ def main() -> None:
         title = event.get("title", "Unknown")
         all_ok = True
 
-        for member_id in member_ids:
+        target_range = get_target_range(event.get("dateTime"))
+        member_guest_counts = assign_guest_counts(len(member_ids), target_range)
+        rsvp_plan = [(organiser_id, 8)] + list(zip(member_ids, member_guest_counts))
+
+        for member_id, guest_count in rsvp_plan:
             rsvp_payload = {
                 "query": RSVP_MUTATION,
                 "variables": {
                     "input": {
                         "eventId": event_id,
                         "memberId": member_id,
-                        "guestsCount": 0,
+                        "guestsCount": guest_count,
                         "response": "YES"
                     }
                 }
@@ -172,7 +226,7 @@ def main() -> None:
                 all_ok = False
                 continue
 
-            print(f"✓ RSVPd member {member_id} to '{title}' — response: {json.dumps(rsvp_result.get('data'))}")
+            print(f"✓ RSVPd member {member_id} to '{title}' with {guest_count} guests")
 
         if all_ok:
             seen_events.append(event_id)
