@@ -5,13 +5,10 @@ import json
 import os
 import sys
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 import requests
 
 GRAPHQL_URL = "https://www.meetup.com/gql2"
-SEEN_EVENTS_FILE = Path("seen_events.json")
-ORGANISER_SEEN_EVENTS_FILE = Path("organiser_seen_events.json")
 
 RSVP_MUTATION = """
 mutation editRsvp($input: EditRsvpInput!) {
@@ -43,32 +40,13 @@ def load_member_ids() -> list:
     return ids
 
 
-def load_seen_events() -> list:
-    if not SEEN_EVENTS_FILE.exists():
-        SEEN_EVENTS_FILE.write_text("[]", encoding="utf-8")
-        return []
-    with SEEN_EVENTS_FILE.open(encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, list) else []
+def load_seen_events(supabase_client) -> set:
+    response = supabase_client.table("meetup_seen_events").select("event_id").execute()
+    return {row["event_id"] for row in response.data}
 
 
-def save_seen_events(seen_events: list) -> None:
-    with SEEN_EVENTS_FILE.open("w", encoding="utf-8") as f:
-        json.dump(seen_events, f, indent=2)
-
-
-def load_organiser_seen_events() -> list:
-    if not ORGANISER_SEEN_EVENTS_FILE.exists():
-        ORGANISER_SEEN_EVENTS_FILE.write_text("[]", encoding="utf-8")
-        return []
-    with ORGANISER_SEEN_EVENTS_FILE.open(encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, list) else []
-
-
-def save_organiser_seen_events(organiser_seen_events: list) -> None:
-    with ORGANISER_SEEN_EVENTS_FILE.open("w", encoding="utf-8") as f:
-        json.dump(organiser_seen_events, f, indent=2)
+def save_seen_event(supabase_client, event_id: str) -> None:
+    supabase_client.table("meetup_seen_events").upsert({"event_id": event_id}).execute()
 
 
 def gql_request(session: requests.Session, payload: dict) -> dict:
@@ -161,13 +139,13 @@ def rsvp_member(
 
 
 def main() -> None:
-    import fcntl
-    lock_file = open("/tmp/meetup_rsvp.lock", "w")
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
-        print("Another instance is already running. Exiting.")
-        sys.exit(0)
+    from supabase import create_client
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        print("Error: SUPABASE_URL and SUPABASE_KEY are required.", file=sys.stderr)
+        sys.exit(1)
+    supabase_client = create_client(supabase_url, supabase_key)
 
     cookies = load_cookies()
     group_urlname = os.environ.get("MEETUP_GROUP_URLNAME", "opencircleclub")
@@ -188,10 +166,7 @@ def main() -> None:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0",
     })
 
-    seen_events = load_seen_events()
-    seen_set = set(seen_events)
-    organiser_seen_events = load_organiser_seen_events()
-    organiser_seen_set = set(organiser_seen_events)
+    seen_set = load_seen_events(supabase_client)
 
     after_datetime = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     fetch_payload = {
@@ -258,21 +233,15 @@ def main() -> None:
         target_range = get_target_range(event.get("dateTime"))
         member_guest_counts = assign_guest_counts(len(member_ids), target_range)
 
-        if event_id not in organiser_seen_set:
-            if rsvp_member(session, event_id, title, organiser_id, 8):
-                organiser_seen_events.append(event_id)
-                save_organiser_seen_events(organiser_seen_events)
-                organiser_seen_set.add(event_id)
-            else:
-                all_ok = False
+        if not rsvp_member(session, event_id, title, organiser_id, 8):
+            all_ok = False
 
         for member_id, guest_count in zip(member_ids, member_guest_counts):
             if not rsvp_member(session, event_id, title, member_id, guest_count):
                 all_ok = False
 
         if all_ok:
-            seen_events.append(event_id)
-            save_seen_events(seen_events)
+            save_seen_event(supabase_client, event_id)
             seen_set.add(event_id)
 
 
