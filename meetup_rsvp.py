@@ -11,6 +11,7 @@ import requests
 
 GRAPHQL_URL = "https://www.meetup.com/gql2"
 SEEN_EVENTS_FILE = Path("seen_events.json")
+ORGANISER_SEEN_EVENTS_FILE = Path("organiser_seen_events.json")
 
 RSVP_MUTATION = """
 mutation editRsvp($input: EditRsvpInput!) {
@@ -54,6 +55,20 @@ def load_seen_events() -> list:
 def save_seen_events(seen_events: list) -> None:
     with SEEN_EVENTS_FILE.open("w", encoding="utf-8") as f:
         json.dump(seen_events, f, indent=2)
+
+
+def load_organiser_seen_events() -> list:
+    if not ORGANISER_SEEN_EVENTS_FILE.exists():
+        ORGANISER_SEEN_EVENTS_FILE.write_text("[]", encoding="utf-8")
+        return []
+    with ORGANISER_SEEN_EVENTS_FILE.open(encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, list) else []
+
+
+def save_organiser_seen_events(organiser_seen_events: list) -> None:
+    with ORGANISER_SEEN_EVENTS_FILE.open("w", encoding="utf-8") as f:
+        json.dump(organiser_seen_events, f, indent=2)
 
 
 def gql_request(session: requests.Session, payload: dict) -> dict:
@@ -111,11 +126,53 @@ def assign_guest_counts(num_members: int, target_range: tuple[int, int]) -> list
     return counts
 
 
+def rsvp_member(
+    session: requests.Session,
+    event_id: str,
+    title: str,
+    member_id: str,
+    guest_count: int,
+) -> bool:
+    rsvp_payload = {
+        "query": RSVP_MUTATION,
+        "variables": {
+            "input": {
+                "eventId": event_id,
+                "memberId": member_id,
+                "guestsCount": guest_count,
+                "response": "YES"
+            }
+        }
+    }
+
+    try:
+        rsvp_result = gql_request(session, rsvp_payload)
+    except requests.RequestException as exc:
+        print(f"RSVP failed for member {member_id} on '{title}': {exc}")
+        return False
+
+    if "errors" in rsvp_result:
+        for error in rsvp_result["errors"]:
+            print(f"RSVP failed for member {member_id} on '{title}': {error.get('message', error)}")
+        return False
+
+    print(f"✓ RSVPd member {member_id} to '{title}' with {guest_count} guests")
+    return True
+
+
 def main() -> None:
+    import fcntl
+    lock_file = open("/tmp/meetup_rsvp.lock", "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        print("Another instance is already running. Exiting.")
+        sys.exit(0)
+
     cookies = load_cookies()
     group_urlname = os.environ.get("MEETUP_GROUP_URLNAME", "opencircleclub")
-    member_ids = load_member_ids()
     organiser_id = os.environ.get("MEETUP_ORGANISER_ID", "469236254")
+    member_ids = [m for m in load_member_ids() if m != organiser_id]
     next_csrf = cookies.get("__Host-NEXT_MEETUP_CSRF", "")
 
     session = requests.Session()
@@ -133,6 +190,8 @@ def main() -> None:
 
     seen_events = load_seen_events()
     seen_set = set(seen_events)
+    organiser_seen_events = load_organiser_seen_events()
+    organiser_seen_set = set(organiser_seen_events)
 
     after_datetime = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     fetch_payload = {
@@ -198,35 +257,18 @@ def main() -> None:
 
         target_range = get_target_range(event.get("dateTime"))
         member_guest_counts = assign_guest_counts(len(member_ids), target_range)
-        rsvp_plan = [(organiser_id, 8)] + list(zip(member_ids, member_guest_counts))
 
-        for member_id, guest_count in rsvp_plan:
-            rsvp_payload = {
-                "query": RSVP_MUTATION,
-                "variables": {
-                    "input": {
-                        "eventId": event_id,
-                        "memberId": member_id,
-                        "guestsCount": guest_count,
-                        "response": "YES"
-                    }
-                }
-            }
-
-            try:
-                rsvp_result = gql_request(session, rsvp_payload)
-            except requests.RequestException as exc:
-                print(f"RSVP failed for member {member_id} on '{title}': {exc}")
+        if event_id not in organiser_seen_set:
+            if rsvp_member(session, event_id, title, organiser_id, 8):
+                organiser_seen_events.append(event_id)
+                save_organiser_seen_events(organiser_seen_events)
+                organiser_seen_set.add(event_id)
+            else:
                 all_ok = False
-                continue
 
-            if "errors" in rsvp_result:
-                for error in rsvp_result["errors"]:
-                    print(f"RSVP failed for member {member_id} on '{title}': {error.get('message', error)}")
+        for member_id, guest_count in zip(member_ids, member_guest_counts):
+            if not rsvp_member(session, event_id, title, member_id, guest_count):
                 all_ok = False
-                continue
-
-            print(f"✓ RSVPd member {member_id} to '{title}' with {guest_count} guests")
 
         if all_ok:
             seen_events.append(event_id)
