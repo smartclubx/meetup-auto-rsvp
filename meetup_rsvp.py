@@ -197,6 +197,7 @@ def main() -> None:
             new_events.append(e)
 
     print(f"Total: {len(events)}, tracked: {len(event_tiers)}, to process: {len(new_events)}")
+    print(f"Server time: {datetime.now(timezone.utc).isoformat()}")
 
     if not new_events:
         print("No new or updated events.")
